@@ -328,8 +328,24 @@ function generateRandomAddress() {
   return wallet.address;
 }
 
-async function sendToRandomAddress(wallet, amount, skipConfirmation = false) {
+// रैंडम अमाउंट जनरेट करने वाला फ़ंक्शन (0.0001 से 0.005 TEA के बीच)
+function generateRandomAmount() {
+  // 0.0001 (min) से 0.005 (max) के बीच एक रैंडम नंबर जनरेट करें
+  const min = 0.0001;
+  const max = 0.005;
+  
+  // ऐसा रैंडम नंबर जनरेट करें जो हर बार अलग हो
+  const randomValue = min + (Math.random() * (max - min));
+  
+  // 8 डेसिमल प्लेसेज तक राउंड करें ताकि विविधता बनी रहे
+  return parseFloat(randomValue.toFixed(8));
+}
+
+async function sendToRandomAddress(wallet, skipConfirmation = false) {
   try {
+    // हर ट्रांज़ैक्शन के लिए एक नया रैंडम अमाउंट जनरेट करें
+    const amount = generateRandomAmount();
+    
     const toAddress = generateRandomAddress();
     const amountWei = ethers.utils.parseEther(amount.toString());
     const gasPrice = await wallet.provider.getGasPrice();
@@ -339,7 +355,7 @@ async function sendToRandomAddress(wallet, amount, skipConfirmation = false) {
     if (!skipConfirmation) {
       const confirmed = await confirmTransaction({
         Action: 'Transfer',
-        Amount: `${amount.toFixed(6)} TEA`,
+        Amount: `${amount} TEA`,
         To: toAddress.slice(0, 6) + '...' + toAddress.slice(-4),
         'Est. Gas': `${gasCost} TEA`
       });
@@ -350,5 +366,141 @@ async function sendToRandomAddress(wallet, amount, skipConfirmation = false) {
       }
     }
     
-    console.log(chalk.yellow(`Sending ${amount.toFixed(6)} TEA to random address: ${chalk.cyan(toAddress)} 📤`));
+    console.log(chalk.yellow(`Sending ${amount} TEA to random address: ${chalk.cyan(toAddress)} 📤`));
+    
+    const tx = await wallet.sendTransaction({
+      to: toAddress,
+      value: amountWei,
+      gasLimit: estimatedGas
+    });
+    
+    console.log(chalk.white(`Transaction sent! Hash: ${chalk.cyan(tx.hash)} 🚀`));
+    console.log(chalk.gray(`View on explorer: ${network.explorer}/tx/${tx.hash} 🔗`));
+    
+    const stopSpinner = showSpinner('Waiting for confirmation...');
+    const receipt = await tx.wait();
+    stopSpinner();
+    
+    console.log(chalk.green(`Transaction confirmed in block ${receipt.blockNumber} ✅`));
+    
+    return { receipt, toAddress, amount };
+  } catch (error) {
+    console.error(chalk.red('Error sending TEA:', error.message, '❌'));
+    return null;
+  }
+}
+
+async function executeRandomTransfers(wallet, numberOfTransfers) {
+  try {
+    console.log(chalk.white('\n===== RANDOM TRANSFERS ====='));
+    console.log(chalk.yellow(`Starting ${numberOfTransfers} random transfers...`));
+    
+    let successCount = 0;
+    let totalSent = 0;
+    
+    for (let i = 0; i < numberOfTransfers; i++) {
+      console.log(chalk.white(`\n--- Transfer ${i + 1}/${numberOfTransfers} ---`));
       
+      // रैंडम डिले जोड़ें ताकि सभी ट्रांज़ैक्शन एक साथ न हों
+      const delayTime = 2000 + Math.floor(Math.random() * 3000); // 2-5 सेकंड का रैंडम डिले
+      if (i > 0) {
+        console.log(chalk.gray(`Waiting ${delayTime/1000} seconds before next transaction...`));
+        await new Promise(resolve => setTimeout(resolve, delayTime));
+      }
+      
+      // अब हम एक फिक्स्ड अमाउंट नहीं भेजेंगे, sendToRandomAddress फ़ंक्शन खुद ही रैंडम अमाउंट जनरेट करेगा
+      const result = await sendToRandomAddress(wallet, true);
+      
+      if (result) {
+        successCount++;
+        totalSent += parseFloat(result.amount);
+      }
+    }
+    
+    console.log(chalk.white('\n===== TRANSFERS SUMMARY ====='));
+    console.log(chalk.green(`Successfully completed ${successCount}/${numberOfTransfers} transfers ✅`));
+    console.log(chalk.white(`Total amount sent: ${chalk.cyan(totalSent.toFixed(8))} TEA 💸`));
+    console.log(chalk.white('===== TRANSFERS COMPLETED =====\n'));
+    
+    return successCount;
+  } catch (error) {
+    console.error(chalk.red('Error executing random transfers:', error.message, '❌'));
+    console.log(chalk.white('===== TRANSFERS FAILED =====\n'));
+    return 0;
+  }
+}
+
+async function showMenu() {
+  console.log(chalk.white('\n===== MENU ====='));
+  console.log(chalk.white('1. Stake TEA'));
+  console.log(chalk.white('2. Withdraw stTEA'));
+  console.log(chalk.white('3. Claim Rewards'));
+  console.log(chalk.white('4. Send To Random Address'));
+  console.log(chalk.white('5. Execute Random Transfers'));
+  console.log(chalk.white('6. Exit'));
+  
+  return new Promise(resolve => {
+    rl.question(chalk.yellow('\nSelect an option (1-6): '), answer => {
+      resolve(parseInt(answer.trim()));
+    });
+  });
+}
+
+async function main() {
+  try {
+    const { provider, wallet, proxy } = await connectToNetwork();
+    await displayBanner(provider);
+    await getWalletInfo(wallet, provider, proxy);
+    
+    while (true) {
+      const choice = await showMenu();
+      
+      switch (choice) {
+        case 1:
+          rl.question(chalk.yellow('Enter amount to stake (TEA): '), async amount => {
+            await stakeTea(wallet, amount.trim());
+            await getWalletInfo(wallet, provider, proxy);
+          });
+          break;
+        
+        case 2:
+          rl.question(chalk.yellow('Enter amount to withdraw (stTEA): '), async amount => {
+            await withdrawTea(wallet, amount.trim());
+            await getWalletInfo(wallet, provider, proxy);
+          });
+          break;
+        
+        case 3:
+          await claimRewards(wallet);
+          await getWalletInfo(wallet, provider, proxy);
+          break;
+        
+        case 4:
+          await sendToRandomAddress(wallet);
+          await getWalletInfo(wallet, provider, proxy);
+          break;
+        
+        case 5:
+          rl.question(chalk.yellow('Enter number of transfers: '), async count => {
+            await executeRandomTransfers(wallet, parseInt(count.trim()));
+            await getWalletInfo(wallet, provider, proxy);
+          });
+          break;
+        
+        case 6:
+          console.log(chalk.green('Exiting... Goodbye! 👋'));
+          rl.close();
+          process.exit(0);
+          break;
+        
+        default:
+          console.log(chalk.red('Invalid option. Please try again. ❌'));
+      }
+    }
+  } catch (error) {
+    console.error(chalk.red('Error:', error.message, '❌'));
+    rl.close();
+  }
+}
+
+main();
